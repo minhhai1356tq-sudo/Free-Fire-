@@ -1,12 +1,10 @@
 // language: C++, x86, Windows, DX11
-// External ESP for Free Fire via BlueStacks
-// Run as admin. Requires HD-Player.exe to be running.
-
 #include <windows.h>
 #include <cmath>
 #include <vector>
 #include <string>
 #include <cstdio>
+#include <thread>
 #include "mem.h"
 #include "offsets.h"
 #include "overlay.h"
@@ -39,20 +37,33 @@ static std::vector<uintptr_t> get_entities(Mem& m, uintptr_t match) {
     return out;
 }
 
-int main() {
-    // console để debug
+DWORD WINAPI HackThread(LPVOID lpParam) {
     AllocConsole();
     FILE* f; freopen_s(&f, "CONOUT$", "w", stdout);
     SetConsoleTitleA("sharkESP log");
 
-    printf("[*] attaching to HD-Player.exe...\n");
+    printf("[*] Injected. Attaching...\n");
     Mem mem;
-    if (!mem.attach(L"HD-Player.exe")) {
-        printf("[!] HD-Player.exe not found.\n"); Sleep(5000); return 1;
+    // Vì đã nằm trong process, attach chính nó
+    mem.pid = GetCurrentProcessId();
+    mem.hProc = GetCurrentProcess();
+
+    // Lấy base của libil2cpp.so
+    HANDLE ms = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, mem.pid);
+    MODULEENTRY32W me{ sizeof(me) };
+    if (Module32FirstW(ms, &me)) {
+        do {
+            if (!_wcsicmp(me.szModule, L"libil2cpp.so")) {
+                mem.base = (uintptr_t)me.modBaseAddr;
+                break;
+            }
+        } while (Module32NextW(ms, &me));
     }
-    printf("[+] pid=%u base=0x%p\n", mem.pid, (void*)mem.base);
+    CloseHandle(ms);
+
+    printf("[+] base=0x%p\n", (void*)mem.base);
     if (!mem.base) {
-        printf("[!] libil2cpp.so not found. BlueStacks 32-bit? started FF?\n");
+        printf("[!] libil2cpp.so not found. Inject later!\n");
         Sleep(5000); return 1;
     }
 
@@ -72,7 +83,6 @@ int main() {
 
         if (show_menu) {
             ImGui::Begin("sharkESP", &show_menu, ImGuiWindowFlags_AlwaysAutoResize);
-            ImGui::Text("PID: %u  base: 0x%p", mem.pid, (void*)mem.base);
             ImGui::Checkbox("Enable ESP", &esp_on);
             ImGui::End();
         }
@@ -88,7 +98,6 @@ int main() {
                 if (lp && cam) {
                     M4 vm = mem.rpm<M4>(cam + off::ViewMatrix);
                     uint32_t local_team = mem.rpm<uint32_t>(lp + off::Player_TeamModeID);
-
                     ImDrawList* dl = ImGui::GetBackgroundDrawList();
                     auto ents = get_entities(mem, match);
 
@@ -105,23 +114,21 @@ int main() {
 
                         float h = ps.y - hs.y;
                         float w = h * 0.55f;
-                        dl->AddRect(ImVec2(hs.x - w/2, hs.y), ImVec2(hs.x + w/2, ps.y),
-                                    IM_COL32(255, 0, 0, 255), 0, 0, 1.5f);
-
-                        uintptr_t np = mem.rpm<uintptr_t>(e + off::Player_Name);
-                        std::wstring nm = mem.read_wstr(np, 32);
-                        if (!nm.empty()) {
-                            char mb[128]{};
-                            WideCharToMultiByte(CP_UTF8, 0, nm.c_str(), -1, mb, sizeof(mb), 0, 0);
-                            dl->AddText(ImVec2(hs.x - w/2, hs.y - 16), IM_COL32(255,255,0,255), mb);
-                        }
+                        dl->AddRect(ImVec2(hs.x - w/2, hs.y), ImVec2(hs.x + w/2, ps.y), IM_COL32(255, 0, 0, 255), 0, 0, 1.5f);
                     }
                 }
             }
         }
-
         ov.end();
         Sleep(1);
     }
     return 0;
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hModule);
+        CreateThread(nullptr, 0, HackThread, nullptr, 0, nullptr);
+    }
+    return TRUE;
 }
