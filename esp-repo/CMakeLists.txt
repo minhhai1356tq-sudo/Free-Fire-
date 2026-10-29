@@ -4,10 +4,6 @@ project(sharkESP CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
-    message(FATAL_ERROR "Must build as 32-bit (x86). Configure with -A Win32.")
-endif()
-
 include(FetchContent)
 
 FetchContent_Declare(
