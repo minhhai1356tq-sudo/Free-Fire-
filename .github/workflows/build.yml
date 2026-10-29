@@ -16,7 +16,7 @@ jobs:
       uses: microsoft/setup-msbuild@v2
 
     - name: Configure CMake (x86)
-      run: cmake -S . -B build -A Win32 -DCMAKE_BUILD_TYPE=Release
+      run: cmake -S esp-repo -B build -A Win32 -DCMAKE_BUILD_TYPE=Release
 
     - name: Build
       run: cmake --build build --config Release --parallel
