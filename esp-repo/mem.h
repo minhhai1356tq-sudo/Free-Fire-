@@ -3,6 +3,7 @@
 #include <tlhelp32.h>
 #include <cstdint>
 #include <cwchar>
+#include <string> // Bắt buộc phải có để dùng std::wstring
 
 struct Mem {
     HANDLE hProc = nullptr;
