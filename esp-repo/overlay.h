@@ -1,6 +1,3 @@
-#pragma once
-#include <windows.h>
-#include <d3d11.h>
 #include <dxgi.h>
 #include "imgui/imgui.h"
 #include "imgui/backends/imgui_impl_win32.h"
