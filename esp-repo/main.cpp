@@ -38,11 +38,9 @@ static std::vector<uintptr_t> get_entities(Mem& m, uintptr_t match) {
 }
 
 DWORD WINAPI HackThread(LPVOID lpParam) {
-    AllocConsole();
-    FILE* f; freopen_s(&f, "CONOUT$", "w", stdout);
-    SetConsoleTitleA("sharkESP log");
+    // Hiển thị thông báo để biết DLL đã chạy
+    MessageBoxA(0, "DLL injected successfully!", "sharkESP", MB_OK);
 
-    printf("[*] Injected. Attaching...\n");
     Mem mem;
     // Vì đã nằm trong process, attach chính nó
     mem.pid = GetCurrentProcessId();
@@ -61,15 +59,15 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
     }
     CloseHandle(ms);
 
-    printf("[+] base=0x%p\n", (void*)mem.base);
     if (!mem.base) {
-        printf("[!] libil2cpp.so not found. Inject later!\n");
-        Sleep(5000); return 1;
+        MessageBoxA(0, "libil2cpp.so not found!", "sharkESP", MB_OK);
+        return 1;
     }
 
     Overlay ov;
     if (!ov.init(GetModuleHandleW(nullptr))) {
-        printf("[!] overlay init failed\n"); Sleep(5000); return 1;
+        MessageBoxA(0, "Overlay init failed!", "sharkESP", MB_OK);
+        return 1;
     }
     SetWindowPos(ov.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
