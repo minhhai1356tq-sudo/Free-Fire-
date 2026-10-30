@@ -38,20 +38,19 @@ static std::vector<uintptr_t> get_entities(Mem& m, uintptr_t match) {
 }
 
 DWORD WINAPI HackThread(LPVOID lpParam) {
-    // Hiển thị thông báo để biết DLL đã chạy
-    MessageBoxA(0, "DLL injected successfully!", "sharkESP", MB_OK);
-
     Mem mem;
-    // Vì đã nằm trong process, attach chính nó
     mem.pid = GetCurrentProcessId();
     mem.hProc = GetCurrentProcess();
 
-    // Lấy base của libil2cpp.so
+    // Quét tìm module libil2cpp.so
     HANDLE ms = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, mem.pid);
     MODULEENTRY32W me{ sizeof(me) };
     if (Module32FirstW(ms, &me)) {
         do {
-            if (!_wcsicmp(me.szModule, L"libil2cpp.so")) {
+            // Quét tìm module có tên chứa libil2cpp (không phân biệt hoa thường)
+            std::wstring modName = me.szModule;
+            for (auto& c : modName) c = towlower(c);
+            if (modName.find(L"libil2cpp") != std::wstring::npos) {
                 mem.base = (uintptr_t)me.modBaseAddr;
                 break;
             }
@@ -60,9 +59,13 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
     CloseHandle(ms);
 
     if (!mem.base) {
-        MessageBoxA(0, "libil2cpp.so not found!", "sharkESP", MB_OK);
+        MessageBoxA(0, "libil2cpp.so not found in Modules!", "sharkESP", MB_OK);
         return 1;
     }
+
+    char msg[256];
+    sprintf_s(msg, "libil2cpp.so found at: 0x%p", (void*)mem.base);
+    MessageBoxA(0, msg, "sharkESP - Base Found", MB_OK);
 
     Overlay ov;
     if (!ov.init(GetModuleHandleW(nullptr))) {
@@ -86,33 +89,38 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
         }
 
         if (esp_on && mem.ok()) {
-            uintptr_t sc    = mem.rpm<uintptr_t>(mem.base + off::StaticClass);
-            uintptr_t match = sc ? mem.rpm<uintptr_t>(sc + off::CurrentMatch) : 0;
-            if (match) {
-                uintptr_t lp = mem.rpm<uintptr_t>(match + off::LocalPlayer);
-                uintptr_t fc = mem.rpm<uintptr_t>(match + off::FollowCamera);
-                uintptr_t cam = fc ? mem.rpm<uintptr_t>(fc + off::Camera) : 0;
+            // Dùng InitBase và StaticClass từ file dump mới
+            uintptr_t initBaseAddr = mem.base + off::InitBase;
+            uintptr_t sc = mem.rpm<uintptr_t>(initBaseAddr);
+            
+            if (sc) {
+                uintptr_t match = mem.rpm<uintptr_t>(sc + off::CurrentMatch);
+                if (match) {
+                    uintptr_t lp = mem.rpm<uintptr_t>(match + off::LocalPlayer);
+                    uintptr_t fc = mem.rpm<uintptr_t>(match + off::FollowCamera);
+                    uintptr_t cam = fc ? mem.rpm<uintptr_t>(fc + off::Camera) : 0;
 
-                if (lp && cam) {
-                    M4 vm = mem.rpm<M4>(cam + off::ViewMatrix);
-                    uint32_t local_team = mem.rpm<uint32_t>(lp + off::Player_TeamModeID);
-                    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-                    auto ents = get_entities(mem, match);
+                    if (lp && cam) {
+                        M4 vm = mem.rpm<M4>(cam + off::ViewMatrix);
+                        uint32_t local_team = mem.rpm<uint32_t>(lp + off::Player_TeamModeID);
+                        ImDrawList* dl = ImGui::GetBackgroundDrawList();
+                        auto ents = get_entities(mem, match);
 
-                    for (uintptr_t e : ents) {
-                        if (e == lp) continue;
-                        if (mem.rpm<bool>(e + off::Player_IsDead)) continue;
-                        if (mem.rpm<uint32_t>(e + off::Player_TeamModeID) == local_team) continue;
+                        for (uintptr_t e : ents) {
+                            if (e == lp) continue;
+                            if (mem.rpm<bool>(e + off::Player_IsDead)) continue;
+                            if (mem.rpm<uint32_t>(e + off::Player_TeamModeID) == local_team) continue;
 
-                        Vec3 pos = mem.rpm<Vec3>(e + off::Player_Position);
-                        Vec3 head = { pos.x, pos.y + 1.6f, pos.z };
-                        Vec2 ps, hs;
-                        if (!w2s(pos, ps, vm, sw, sh)) continue;
-                        if (!w2s(head, hs, vm, sw, sh)) continue;
+                            Vec3 pos = mem.rpm<Vec3>(e + off::Player_Position);
+                            Vec3 head = { pos.x, pos.y + 1.6f, pos.z };
+                            Vec2 ps, hs;
+                            if (!w2s(pos, ps, vm, sw, sh)) continue;
+                            if (!w2s(head, hs, vm, sw, sh)) continue;
 
-                        float h = ps.y - hs.y;
-                        float w = h * 0.55f;
-                        dl->AddRect(ImVec2(hs.x - w/2, hs.y), ImVec2(hs.x + w/2, ps.y), IM_COL32(255, 0, 0, 255), 0, 0, 1.5f);
+                            float h = ps.y - hs.y;
+                            float w = h * 0.55f;
+                            dl->AddRect(ImVec2(hs.x - w/2, hs.y), ImVec2(hs.x + w/2, ps.y), IM_COL32(255, 0, 0, 255), 0, 0, 1.5f);
+                        }
                     }
                 }
             }
