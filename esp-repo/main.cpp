@@ -1,5 +1,5 @@
 // language: C++, x64, Windows, DX11
-// External ESP for Free Fire via BlueStacks - Full Feature
+// Full corrected main.cpp with robust ELF pattern/header scanner for BlueStacks x64
 #include <windows.h>
 #include <cmath>
 #include <vector>
@@ -26,6 +26,46 @@ static bool w2s(const Vec3& w, Vec2& out, const M4& vm, int sw, int sh) {
     return true;
 }
 
+// Hàm quét RAM tìm base của libil2cpp.so tối ưu cho giả lập Android x64
+uintptr_t FindIL2CppBase(HANDLE hProc) {
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    uintptr_t addr = (uintptr_t)si.lpMinimumApplicationAddress;
+    uintptr_t maxAddr = (uintptr_t)si.lpMaximumApplicationAddress;
+
+    while (addr < maxAddr) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+            if (mbi.State == MEM_COMMIT && 
+               (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
+                
+                unsigned char header[64] = { 0 };
+                SIZE_T bytesRead = 0;
+                if (ReadProcessMemory(hProc, mbi.BaseAddress, header, sizeof(header), &bytesRead)) {
+                    // Kiểm tra ELF Magic (\x7F ELF) và kiến trúc 64-bit (EI_CLASS = 2)
+                    if (header[0] == 0x7F && header[1] == 'E' && header[2] == 'L' && header[3] == 'F' && header[4] == 2) {
+                        uintptr_t base = (uintptr_t)mbi.BaseAddress;
+                        char checkBuf[512] = { 0 };
+                        if (ReadProcessMemory(hProc, (LPCVOID)(base + 0x1000), checkBuf, sizeof(checkBuf), &bytesRead)) {
+                            if (strstr(checkBuf, "il2cpp") != nullptr || strstr(checkBuf, "GlobalMetadata") != nullptr) {
+                                return base;
+                            }
+                        }
+                        // Fallback nếu vùng nhớ đủ lớn cho một file .so libil2cpp (>16MB)
+                        if (mbi.RegionSize > 0x1000000) {
+                            return base;
+                        }
+                    }
+                }
+            }
+            addr = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        } else {
+            break;
+        }
+    }
+    return 0;
+}
+
 static std::vector<uintptr_t> get_entities(Mem& m, uintptr_t match) {
     std::vector<uintptr_t> out;
     uintptr_t dict = m.rpm<uintptr_t>(match + off::DictionaryEntities);
@@ -40,52 +80,20 @@ static std::vector<uintptr_t> get_entities(Mem& m, uintptr_t match) {
     return out;
 }
 
-// Hàm quét RAM tìm base của libil2cpp.so
-uintptr_t FindIL2CppBase(HANDLE hProc) {
-    SYSTEM_INFO si;
-    GetSystemInfo(&si);
-    uintptr_t addr = (uintptr_t)si.lpMinimumApplicationAddress;
-    uintptr_t maxAddr = (uintptr_t)si.lpMaximumApplicationAddress;
-
-    while (addr < maxAddr) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (VirtualQueryEx(hProc, (LPCVOID)addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
-            if (mbi.State == MEM_COMMIT && 
-               (mbi.Protect == PAGE_READONLY || mbi.Protect == PAGE_READWRITE || 
-                mbi.Protect == PAGE_EXECUTE_READ || mbi.Protect == PAGE_EXECUTE_READWRITE)) {
-                
-                uint32_t magic = 0;
-                SIZE_T bytesRead = 0;
-                if (ReadProcessMemory(hProc, mbi.BaseAddress, &magic, sizeof(magic), &bytesRead)) {
-                    if (magic == 0x464C457F) { // ELF Magic
-                        return (uintptr_t)mbi.BaseAddress;
-                    }
-                }
-            }
-        }
-        addr = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
-    }
-    return 0;
-}
-
 DWORD WINAPI HackThread(LPVOID lpParam) {
+    Sleep(4000); // Chờ game load ổn định vào sảnh
+
     Mem mem;
     mem.pid = GetCurrentProcessId();
     mem.hProc = GetCurrentProcess();
 
-    mem.base = FindIL2CppBase(mem.hProc);
-    if (!mem.base) {
-        MessageBoxA(0, "Cannot find libil2cpp.so! Game not fully loaded?", "sharkESP", MB_OK);
-        return 1;
+    // Vòng lặp chờ tìm libil2cpp.so thay vì văng lỗi ngay
+    while ((mem.base = FindIL2CppBase(mem.hProc)) == 0) {
+        Sleep(1000);
     }
-
-    char msg[256];
-    sprintf_s(msg, "libil2cpp.so found at: 0x%p", (void*)mem.base);
-    MessageBoxA(0, msg, "sharkESP - Base Found", MB_OK);
 
     Overlay ov;
     if (!ov.init(GetModuleHandleW(nullptr))) {
-        MessageBoxA(0, "Overlay init failed!", "sharkESP", MB_OK);
         return 1;
     }
     SetWindowPos(ov.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
@@ -99,7 +107,7 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
         ov.begin();
 
         if (show_menu) {
-            ImGui::Begin("sharkESP", &show_menu, ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::Begin("sharkESP Sandbox", &show_menu, ImGuiWindowFlags_AlwaysAutoResize);
             ImGui::Checkbox("Enable ESP", &esp_on);
             ImGui::End();
         }
@@ -126,7 +134,6 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
                             if (mem.rpm<bool>(e + off::Player_IsDead)) continue;
                             if (mem.rpm<uint32_t>(e + off::Player_TeamModeID) == local_team) continue;
 
-                            // Đọc vị trí
                             uintptr_t physX = mem.rpm<uintptr_t>(e + off::Player_ShadowBase);
                             if (!physX) continue;
                             uintptr_t transNode = mem.rpm<uintptr_t>(physX + 0x8);
@@ -145,10 +152,8 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
                             float h = ps.y - hs.y;
                             float w = h * 0.55f;
                             
-                            // Vẽ Box
                             dl->AddRect(ImVec2(hs.x - w/2, hs.y), ImVec2(hs.x + w/2, ps.y), IM_COL32(255, 0, 0, 255), 0, 0, 1.5f);
 
-                            // Vẽ Tên
                             uintptr_t np = mem.rpm<uintptr_t>(e + off::Player_Name);
                             std::wstring nm = mem.read_wstr(np, 32);
                             if (!nm.empty()) {
