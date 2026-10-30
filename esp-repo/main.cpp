@@ -5,6 +5,7 @@
 #include <string>
 #include <cstdio>
 #include <thread>
+#include <tlhelp32.h>
 #include "mem.h"
 #include "offsets.h"
 #include "overlay.h"
@@ -21,6 +22,51 @@ static bool w2s(const Vec3& w, Vec2& out, const M4& vm, int sw, int sh) {
     out.x = (sw * 0.5f) * ((cx/cw) + 1.0f);
     out.y = (sh * 0.5f) * (1.0f - (cy/cw));
     return true;
+}
+
+// Hàm tìm Base của libil2cpp.so (Quét 3 lớp)
+uintptr_t FindIL2CppBase() {
+    // Lớp 1: Dùng API Windows
+    uintptr_t base = (uintptr_t)GetModuleHandleA("libil2cpp.so");
+    if (base) return base;
+
+    // Lớp 2: Quét danh sách Module
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+    if (hSnap != INVALID_HANDLE_VALUE) {
+        MODULEENTRY32W me = { sizeof(me) };
+        if (Module32FirstW(hSnap, &me)) {
+            do {
+                std::wstring name = me.szModule;
+                if (name.find(L"libil2cpp") != std::wstring::npos) {
+                    CloseHandle(hSnap);
+                    return (uintptr_t)me.modBaseAddr;
+                }
+            } while (Module32NextW(hSnap, &me));
+        }
+        CloseHandle(hSnap);
+    }
+
+    // Lớp 3: Quét bộ nhớ tìm Header ELF (0x7F 45 4C 46) - Nếu BlueStacks giấu module
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    uintptr_t addr = (uintptr_t)si.lpMinimumApplicationAddress;
+    uintptr_t maxAddr = (uintptr_t)si.lpMaximumApplicationAddress;
+    while (addr < maxAddr) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery((LPCVOID)addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+            if (mbi.State == MEM_COMMIT && mbi.Protect != PAGE_NOACCESS) {
+                // Check quyền đọc
+                if (mbi.Protect == PAGE_READONLY || mbi.Protect == PAGE_READWRITE || mbi.Protect == PAGE_EXECUTE_READ || mbi.Protect == PAGE_EXECUTE_READWRITE) {
+                    uint32_t magic = *(uint32_t*)addr;
+                    if (magic == 0x464C457F) { // ELF Magic
+                        return addr;
+                    }
+                }
+            }
+        }
+        addr += mbi.RegionSize;
+    }
+    return 0;
 }
 
 static std::vector<uintptr_t> get_entities(Mem& m, uintptr_t match) {
@@ -42,24 +88,9 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
     mem.pid = GetCurrentProcessId();
     mem.hProc = GetCurrentProcess();
 
-    // Quét tìm module libil2cpp.so
-    HANDLE ms = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, mem.pid);
-    MODULEENTRY32W me{ sizeof(me) };
-    if (Module32FirstW(ms, &me)) {
-        do {
-            // Quét tìm module có tên chứa libil2cpp (không phân biệt hoa thường)
-            std::wstring modName = me.szModule;
-            for (auto& c : modName) c = towlower(c);
-            if (modName.find(L"libil2cpp") != std::wstring::npos) {
-                mem.base = (uintptr_t)me.modBaseAddr;
-                break;
-            }
-        } while (Module32NextW(ms, &me));
-    }
-    CloseHandle(ms);
-
+    mem.base = FindIL2CppBase();
     if (!mem.base) {
-        MessageBoxA(0, "libil2cpp.so not found in Modules!", "sharkESP", MB_OK);
+        MessageBoxA(0, "Cannot find libil2cpp.so! Anti-cheat is hiding it.", "sharkESP", MB_OK);
         return 1;
     }
 
@@ -89,7 +120,7 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
         }
 
         if (esp_on && mem.ok()) {
-            // Dùng InitBase và StaticClass từ file dump mới
+            // Dùng InitBase và StaticClass để lấy Match
             uintptr_t initBaseAddr = mem.base + off::InitBase;
             uintptr_t sc = mem.rpm<uintptr_t>(initBaseAddr);
             
@@ -111,7 +142,20 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
                             if (mem.rpm<bool>(e + off::Player_IsDead)) continue;
                             if (mem.rpm<uint32_t>(e + off::Player_TeamModeID) == local_team) continue;
 
-                            Vec3 pos = mem.rpm<Vec3>(e + off::Player_Position);
+                            // ĐỌC VỊ TRÍ BẰNG POINTER CHAIN TỪ FILE DUMP MỚI
+                            // Player -> PhysXData (0x14E8) -> TransformNode (+0x8) -> Transform (+0x8) -> worldPos (+0x60)
+                            uintptr_t physX = mem.rpm<uintptr_t>(e + 0x14E8);
+                            if (!physX) continue;
+                            uintptr_t transNode = mem.rpm<uintptr_t>(physX + 0x8);
+                            if (!transNode) continue;
+                            uintptr_t transform = mem.rpm<uintptr_t>(transNode + 0x8);
+                            if (!transform) continue;
+                            
+                            Vec3 pos = mem.rpm<Vec3>(transform + 0x60);
+                            
+                            // Nếu pos bằng 0 thì bỏ qua (tránh vẽ vào gốc tọa độ)
+                            if (pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f) continue;
+
                             Vec3 head = { pos.x, pos.y + 1.6f, pos.z };
                             Vec2 ps, hs;
                             if (!w2s(pos, ps, vm, sw, sh)) continue;
