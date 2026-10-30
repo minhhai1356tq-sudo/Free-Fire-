@@ -31,7 +31,8 @@ public:
             0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
             nullptr, nullptr, hInst, nullptr);
 
-        SetLayeredWindowAttributes(hwnd, RGB(0,0,0), 0, LWA_COLORKEY);
+        // Để 255 và màu hồng để TEST xem cửa sổ có hiện không
+        SetLayeredWindowAttributes(hwnd, RGB(255,0,255), 255, LWA_COLORKEY);
         ShowWindow(hwnd, SW_SHOW);
 
         DXGI_SWAP_CHAIN_DESC sd{};
