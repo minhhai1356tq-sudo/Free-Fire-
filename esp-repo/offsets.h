@@ -10,8 +10,8 @@ namespace off {
     constexpr uintptr_t DictionaryEntities = 0x68;
 
     constexpr uintptr_t Player_IsDead   = 0x50;
-    constexpr uintptr_t Player_Name     = 0x31C;
-    constexpr uintptr_t Player_Position = 0x18C; // Vẫn giữ offset cũ, nếu sai sẽ phải dùng PhysXData
+    constexpr uintptr_t Player_Name     = 0x320;
+    constexpr uintptr_t Player_ShadowBase = 0x14E8; // <-- Dòng này đây
     constexpr uintptr_t Player_TeamModeID = 0x2D4;
     constexpr uintptr_t Player_IsBot    = 0x324;
 
