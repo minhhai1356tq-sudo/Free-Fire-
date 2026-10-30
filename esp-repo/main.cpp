@@ -1,12 +1,12 @@
 // language: C++, x64, Windows, DX11
-// External ESP for Free Fire via BlueStacks - Full Feature (Box, Bones, Name, Health)
+// External ESP for Free Fire via BlueStacks - Full Feature
 #include <windows.h>
 #include <cmath>
 #include <vector>
 #include <string>
 #include <cstdio>
 #include <thread>
-#include <algorithm>
+#include <tlhelp32.h>
 #include "mem.h"
 #include "offsets.h"
 #include "overlay.h"
@@ -16,7 +16,6 @@ struct Vec2 { float x, y; };
 struct Vec3 { float x, y, z; };
 struct M4   { float m[4][4]; };
 
-// --- Các hàm W2S ---
 static bool w2s(const Vec3& w, Vec2& out, const M4& vm, int sw, int sh) {
     float cx = w.x*vm.m[0][0] + w.y*vm.m[1][0] + w.z*vm.m[2][0] + vm.m[3][0];
     float cy = w.x*vm.m[0][1] + w.y*vm.m[1][1] + w.z*vm.m[2][1] + vm.m[3][1];
@@ -27,7 +26,6 @@ static bool w2s(const Vec3& w, Vec2& out, const M4& vm, int sw, int sh) {
     return true;
 }
 
-// --- Lấy danh sách Entity ---
 static std::vector<uintptr_t> get_entities(Mem& m, uintptr_t match) {
     std::vector<uintptr_t> out;
     uintptr_t dict = m.rpm<uintptr_t>(match + off::DictionaryEntities);
@@ -42,7 +40,7 @@ static std::vector<uintptr_t> get_entities(Mem& m, uintptr_t match) {
     return out;
 }
 
-// --- Hàm quét tìm Base (cho 64-bit) ---
+// Hàm quét RAM tìm base của libil2cpp.so
 uintptr_t FindIL2CppBase(HANDLE hProc) {
     SYSTEM_INFO si;
     GetSystemInfo(&si);
@@ -55,10 +53,11 @@ uintptr_t FindIL2CppBase(HANDLE hProc) {
             if (mbi.State == MEM_COMMIT && 
                (mbi.Protect == PAGE_READONLY || mbi.Protect == PAGE_READWRITE || 
                 mbi.Protect == PAGE_EXECUTE_READ || mbi.Protect == PAGE_EXECUTE_READWRITE)) {
+                
                 uint32_t magic = 0;
                 SIZE_T bytesRead = 0;
                 if (ReadProcessMemory(hProc, mbi.BaseAddress, &magic, sizeof(magic), &bytesRead)) {
-                    if (magic == 0x464C457F) { // ELF magic
+                    if (magic == 0x464C457F) { // ELF Magic
                         return (uintptr_t)mbi.BaseAddress;
                     }
                 }
@@ -69,7 +68,6 @@ uintptr_t FindIL2CppBase(HANDLE hProc) {
     return 0;
 }
 
-// --- Hàm vẽ chính (chạy trong thread) ---
 DWORD WINAPI HackThread(LPVOID lpParam) {
     Mem mem;
     mem.pid = GetCurrentProcessId();
@@ -77,9 +75,13 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
 
     mem.base = FindIL2CppBase(mem.hProc);
     if (!mem.base) {
-        MessageBoxA(0, "Cannot find libil2cpp.so in RAM! Game not fully loaded?", "sharkESP", MB_OK);
+        MessageBoxA(0, "Cannot find libil2cpp.so! Game not fully loaded?", "sharkESP", MB_OK);
         return 1;
     }
+
+    char msg[256];
+    sprintf_s(msg, "libil2cpp.so found at: 0x%p", (void*)mem.base);
+    MessageBoxA(0, msg, "sharkESP - Base Found", MB_OK);
 
     Overlay ov;
     if (!ov.init(GetModuleHandleW(nullptr))) {
@@ -124,8 +126,8 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
                             if (mem.rpm<bool>(e + off::Player_IsDead)) continue;
                             if (mem.rpm<uint32_t>(e + off::Player_TeamModeID) == local_team) continue;
 
-                            // Đọc vị trí từ PhysXData
-                            uintptr_t physX = mem.rpm<uintptr_t>(e + 0x14E8); // Player_ShadowBase
+                            // Đọc vị trí
+                            uintptr_t physX = mem.rpm<uintptr_t>(e + off::Player_ShadowBase);
                             if (!physX) continue;
                             uintptr_t transNode = mem.rpm<uintptr_t>(physX + 0x8);
                             if (!transNode) continue;
@@ -140,16 +142,13 @@ DWORD WINAPI HackThread(LPVOID lpParam) {
                             if (!w2s(pos, ps, vm, sw, sh)) continue;
                             if (!w2s(head, hs, vm, sw, sh)) continue;
 
-                            // Vẽ Box
                             float h = ps.y - hs.y;
                             float w = h * 0.55f;
+                            
+                            // Vẽ Box
                             dl->AddRect(ImVec2(hs.x - w/2, hs.y), ImVec2(hs.x + w/2, ps.y), IM_COL32(255, 0, 0, 255), 0, 0, 1.5f);
 
-                            // Vẽ thanh máu (dùng HealthBar giả lập, vì HP server-side đéo đọc được)
-                            // Nếu muốn, mày có thể đọc thanh máu từ Offset của Player_Health (nếu có).
-                            // Hiện tại tao không vẽ vì server-side.
-
-                            // Vẽ Name
+                            // Vẽ Tên
                             uintptr_t np = mem.rpm<uintptr_t>(e + off::Player_Name);
                             std::wstring nm = mem.read_wstr(np, 32);
                             if (!nm.empty()) {
